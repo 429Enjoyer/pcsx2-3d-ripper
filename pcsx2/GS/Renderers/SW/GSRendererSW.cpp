@@ -427,6 +427,10 @@ MULTI_ISA_UNSHARED_END
 void GSRendererSW::Draw()
 {
 	const GSDrawingContext* context = m_context;
+	// Needs proper testing with games that deliberately overflow ST/Q.
+	// Retain original Q before RewriteVerticesIfSTOverflow normalizes it.
+	if (m_3d_screenshot)
+		m_3d_triangles = GetGeometryFor3DScreenshot();
 
 	switch (m_vt.m_primclass)
 	{
@@ -647,8 +651,9 @@ void GSRendererSW::Draw()
 void GSRendererSW::Queue(GSRingHeap::SharedPtr<GSRasterizerData>& item)
 {
 	SharedData* sd = (SharedData*)item.get();
+	const bool capture_triangles = m_3d_screenshot && sd->primclass == GS_TRIANGLE_CLASS;
 
-	if (sd->m_syncpoint == SharedData::SyncSource)
+	if (sd->m_syncpoint == SharedData::SyncSource || capture_triangles)
 	{
 		Sync(4);
 	}
@@ -656,6 +661,37 @@ void GSRendererSW::Queue(GSRingHeap::SharedPtr<GSRasterizerData>& item)
 	// update previously invalidated parts
 
 	sd->UpdateSource();
+
+	if (capture_triangles)
+	{
+		// Load all exported texels after synchronizing previous draws, before
+		// this draw can change VRAM or invalidate the cache's source pages.
+		if (PRIM->TME)
+		{
+			GSTextureCacheSW::Texture* texture = sd->m_tex[0].t;
+			if (!texture)
+				texture = m_tc->Lookup(m_context->TEX0, m_draw_env->TEXA);
+			if (texture)
+			{
+				const u32 width = 1u << texture->m_TEX0.TW;
+				const u32 height = 1u << texture->m_TEX0.TH;
+				const auto region = GS3DScreenshot::GetTextureRegionForCLAMP(m_context->CLAMP, width, height);
+				if (texture->Update(GSVector4i(region.u_min, region.v_min, region.u_max + 1, region.v_max + 1)) &&
+					texture->DumpFor3DScreenshot(m_3d_screenshot->m_dump_dir, region))
+				{
+					m_3d_screenshot->SetTextureName(texture->m_dump_filename);
+					m_3d_screenshot->SetTextureRegion(region, width, height);
+				}
+				else
+					m_3d_screenshot->m_texture_dump_failed = true;
+			}
+			else
+				m_3d_screenshot->m_texture_dump_failed = true;
+		}
+		for (const auto& triangle : m_3d_triangles)
+			m_3d_screenshot->AddTri(triangle);
+		m_3d_triangles.clear();
+	}
 
 	if (sd->m_syncpoint == SharedData::SyncTarget)
 	{

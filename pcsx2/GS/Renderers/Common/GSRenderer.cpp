@@ -30,6 +30,9 @@
 #include <thread>
 #include <mutex>
 
+static std::string GSGetBase3DScreenshotDirectory();
+static std::string GSGetBase3DScreenshotFilename();
+
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -63,6 +66,8 @@ GSRenderer::~GSRenderer() = default;
 
 void GSRenderer::Reset(bool hardware_reset)
 {
+	if (hardware_reset)
+		m_queued_3d_screenshot = false;
 	// Clear the current display texture.
 	if (hardware_reset)
 		g_gs_device->ClearCurrent();
@@ -807,6 +812,50 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		}
 	}
 
+	// Complete a 3D capture at the next frame boundary. Flush offscreen draws
+	// too: newer GS batching can intentionally leave those pending at VSync.
+	if (m_3d_screenshot)
+	{
+		Flush(GSFlushReason::CONTEXTCHANGE);
+		if (m_3d_screenshot->IsEmpty())
+		{
+			Host::AddIconOSDMessage("GS3DScreenshot", ICON_FA_CAMERA,
+				TRANSLATE_SV("GS", "No exportable triangles in this frame."), Host::OSD_INFO_DURATION);
+		}
+		else if (m_3d_screenshot->DumpToFile(GSGetBase3DScreenshotFilename()))
+		{
+			Host::AddIconOSDMessage("GS3DScreenshot", ICON_FA_CAMERA,
+				fmt::format(TRANSLATE_FS("GS", "Saved 3D screenshot to '{}'."), m_3d_screenshot->m_dump_dir),
+				Host::OSD_INFO_DURATION);
+		}
+		else
+		{
+			Host::AddIconOSDMessage("GS3DScreenshot", ICON_FA_CAMERA,
+				fmt::format(TRANSLATE_FS("GS", "Failed to save 3D screenshot to '{}'."), m_3d_screenshot->m_dump_dir),
+				Host::OSD_ERROR_DURATION);
+		}
+		m_3d_screenshot.reset();
+	}
+	if (m_queued_3d_screenshot)
+	{
+		Flush(GSFlushReason::CONTEXTCHANGE);
+		m_queued_3d_screenshot = false;
+		const std::string directory = GSGetBase3DScreenshotDirectory();
+		if (FileSystem::EnsureDirectoryExists(directory.c_str(), true))
+		{
+			for (auto& flags : m_3d_tri_was_culled)
+				flags.clear();
+			m_3d_screenshot = std::make_unique<GS3DScreenshot>();
+			m_3d_screenshot->m_dump_dir = directory;
+		}
+		else
+		{
+			Host::AddIconOSDMessage("GS3DScreenshot", ICON_FA_CAMERA,
+				fmt::format(TRANSLATE_FS("GS", "Failed to create 3D screenshot directory '{}'."), directory),
+				Host::OSD_ERROR_DURATION);
+		}
+	}
+
 	// capture
 	if (GSCapture::IsCapturingVideo())
 	{
@@ -859,6 +908,14 @@ void GSRenderer::QueueSnapshot(const std::string& path, const u32 gsdump_frames)
 
 	// this is really gross, but wx we get the snapshot request after shift...
 	m_dump_frames = gsdump_frames;
+	if (gsdump_frames > 0)
+	{
+		if (GSGetCurrentRenderer() == GSRendererType::SW)
+			m_queued_3d_screenshot = true;
+		else
+			Host::AddIconOSDMessage("GS3DScreenshot", ICON_FA_CAMERA,
+				TRANSLATE_SV("GS", "3D screenshots require the Software renderer."), Host::OSD_INFO_DURATION);
+	}
 }
 
 static std::string GSGetBaseFilename()
@@ -927,6 +984,58 @@ std::string GSGetBaseSnapshotFilename()
 
 	return Path::Combine(EmuFolders::Snapshots, GSGetBaseFilename());
 }
+
+static std::string GSGetBase3DScreenshotDirectory()
+{
+	std::string dirname;
+
+	// append the game serial and title
+	if (std::string name(VMManager::GetTitle(true)); !name.empty())
+	{
+		Path::SanitizeFileName(&name);
+		if (name.length() > 219)
+			name.resize(219);
+		dirname += name;
+	}
+	if (std::string serial = VMManager::GetDiscSerial(); !serial.empty())
+	{
+		Path::SanitizeFileName(&serial);
+		dirname += '_';
+		dirname += serial;
+	}
+
+	return Path::Combine(Path::Combine(EmuFolders::Snapshots, "screenshots_3d"), dirname);
+}
+
+// Note that the timestamp here will NOT line up exactly with the
+// one from GSGetBaseFilename used for snaps/GS dumps.
+static std::string GSGetBase3DScreenshotFilename()
+{
+	std::string filename = "shot";
+
+	const time_t cur_time = time(nullptr);
+	char local_time[16];
+
+	if (strftime(local_time, sizeof(local_time), "%Y%m%d%H%M%S", localtime(&cur_time)))
+	{
+		static time_t prev_snap;
+		static int n = 2;
+
+		filename += '_';
+
+		if (cur_time == prev_snap)
+			filename += fmt::format("{0}_({1})", local_time, n++);
+		else
+		{
+			n = 2;
+			filename += fmt::format("{}", local_time);
+		}
+		prev_snap = cur_time;
+	}
+
+	return filename;
+}
+
 
 std::string GSGetBaseVideoFilename()
 {

@@ -50,6 +50,9 @@ protected:
 	std::unique_ptr<IRasterizer> m_rl;
 	std::unique_ptr<GSTextureCacheSW> m_tc;
 	GSRingHeap m_vertex_heap;
+	// Original GS coordinates, saved before rasterizer overflow workarounds
+	// rewrite STQ. Only populated for the current 3D capture draw.
+	std::vector<GS3DScreenshot::Tri> m_3d_triangles;
 	std::array<GSTexture*, 3> m_texture = {};
 	u8* m_output;
 	GSPixelOffset4* m_fzb;

@@ -26,6 +26,7 @@ public:
 		u32 m_valid[GS_MAX_PAGES];
 		std::array<u16, GS_MAX_PAGES> m_erase_it;
 		const u32* RESTRICT m_sharedbits;
+		std::string m_dump_filename;
 
 		// m_valid
 		// fast mode: each u32 bits map to the 32 blocks of that page
@@ -38,6 +39,7 @@ public:
 
 		bool Update(const GSVector4i& r);
 		bool Save(const std::string& fn) const;
+		bool DumpFor3DScreenshot(const std::string& dirname, const GS3DScreenshot::TextureRegion& region);
 	};
 
 protected:

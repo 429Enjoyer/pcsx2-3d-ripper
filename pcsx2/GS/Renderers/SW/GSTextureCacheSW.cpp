@@ -6,6 +6,12 @@
 #include "GS/GSPerfMon.h"
 #include "GS/GSPng.h"
 #include "GS/GSUtil.h"
+#include "GS/GSXXH.h"
+
+#include "common/FileSystem.h"
+#include "common/Image.h"
+#include "common/Path.h"
+#include "fmt/format.h"
 
 GSTextureCacheSW::GSTextureCacheSW() = default;
 
@@ -342,4 +348,106 @@ bool GSTextureCacheSW::Texture::Save(const std::string& fn) const
 		return GSPng::Save(format, fn, reinterpret_cast<const u8*>(dumptex.get()),
 			w, h, w * sizeof(u32), GSConfig.PNGCompressionLevel);
 	}
+}
+
+// PS2 uses the modulate formula 2*vertexAlpha*textureAlpha for
+// the alpha channel. Lots of games bake a factor of 0.5 into the
+// textures, turning this into vertexAlpha*textureAlpha.
+//
+// To avoid tons of half-transparent textures, we expand the
+// original range of the alpha channel to a full 0-255 range.
+// Textures we do this to will be marked like "-XA128" in the
+// filename, telling you the alpha was expanded from the original
+// range 0-128. Downstream users can use the filename to know
+// what modulate formula to use.
+static int ExpandAlphaChannel(u8* pixels, u32 num_pixels)
+{
+	u8 max_alpha = 0;
+	for (u32 i = 0; i != num_pixels; i++)
+		max_alpha = std::max(max_alpha, pixels[4 * i + 3]);
+
+	// No expansion needed
+	if (max_alpha == 255)
+		return 255;
+
+	// If the alpha channel is completely zero, it is probably
+	// unused (ie. texture alpha is disabled in the PRIM
+	// register), so we discard the alpha.
+	if (max_alpha == 0)
+	{
+		for (u32 i = 0; i != num_pixels; i++)
+			pixels[4 * i + 3] = 255;
+
+		return 0;
+	}
+
+	const unsigned f = (256 * 255) / max_alpha;
+	for (u32 i = 0; i != num_pixels; i++)
+	{
+		// Fixed point for a = round(a * 255/max_alpha)
+		pixels[4 * i + 3] = (f * pixels[4 * i + 3] + 128) >> 8;
+	}
+
+	return max_alpha;
+}
+
+bool GSTextureCacheSW::Texture::DumpFor3DScreenshot(
+	const std::string& dirname,
+	const GS3DScreenshot::TextureRegion& region)
+{
+	// Indexed texture bytes can stay unchanged while the CLUT changes. Hash the
+	// decoded pixels for every export, and check the actual destination directory.
+	m_dump_filename.clear();
+
+	const u32* RESTRICT clut = g_gs_renderer->m_mem.m_clut;
+
+	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[m_TEX0.PSM];
+	const u8* RESTRICT src = (u8*)m_buff;
+	const u32 src_pitch = 1u << (m_tw + (psm.pal == 0 ? 2 : 0));
+
+	if (!src)
+	{
+		// Shouldn't happen
+		return false;
+	}
+
+	// Copy the subregion into a new buffer
+	const u32 dst_w = region.Width();
+	const u32 dst_h = region.Height();
+	std::vector<u32> dumptex = GS3DScreenshot::CopyTextureRegion(src, src_pitch,
+		psm.pal ? clut : nullptr, region);
+
+	const u64 hash = GSXXH3_64bits(dumptex.data(), dst_w * dst_h * 4);
+
+	const int expanded_alpha = ExpandAlphaChannel(
+		reinterpret_cast<u8*>(dumptex.data()),
+		dst_w * dst_h);
+
+	std::string filename;
+	if (expanded_alpha == 255) // no expansion
+		filename = fmt::format("{:x}-{}x{}.png", hash, dst_w, dst_h);
+	else
+		filename = fmt::format("{:x}-{}x{}-XA{}.png", hash, dst_w, dst_h, expanded_alpha);
+
+	const std::string path = Path::Combine(dirname, filename);
+
+	if (FileSystem::FileExists(path.c_str()))
+	{
+		m_dump_filename = std::move(filename);
+		return true;
+	}
+
+	RGBA8Image image(dst_w, dst_h, std::move(dumptex));
+	auto file = FileSystem::OpenManagedCFile(path.c_str(), "wb");
+	if (!file)
+		return false;
+	const u8 quality = static_cast<u8>(std::clamp<int>(GSConfig.PNGCompressionLevel, 0, 9) * 10);
+	const bool encoded = image.SaveToFile(path.c_str(), file.get(), quality);
+	const bool closed = std::fclose(file.release()) == 0;
+	const bool saved = encoded && closed;
+	if (saved)
+		m_dump_filename = std::move(filename);
+	else
+		FileSystem::DeleteFilePath(path.c_str()); // allow a subsequent capture to retry
+	return saved;
 }

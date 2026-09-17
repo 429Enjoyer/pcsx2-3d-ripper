@@ -18,6 +18,7 @@ private:
 
 	std::string m_snapshot;
 	u32 m_dump_frames = 0;
+	bool m_queued_3d_screenshot = false;
 	u32 m_skipped_duplicate_frames = 0;
 
 	// Tracking draw counters for idle frame detection.

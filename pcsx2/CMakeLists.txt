@@ -486,6 +486,7 @@ set(pcsx2GSSources
 	GS/GS.cpp
 	GS/GSCapture.cpp
 	GS/GSClut.cpp
+	GS/GS3DScreenshot.cpp
 	GS/GSDrawingContext.cpp
 	GS/GSDrawingEnvironment.cpp
 	GS/GSDump.cpp
@@ -520,6 +521,7 @@ set(pcsx2GSHeaders
 	GS/GSBlock.h
 	GS/GSCapture.h
 	GS/GSClut.h
+	GS/GS3DScreenshot.h
 	GS/GSDrawingContext.h
 	GS/GSDrawingEnvironment.h
 	GS/GSDump.h

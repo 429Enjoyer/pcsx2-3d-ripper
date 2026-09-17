@@ -1,27 +1,71 @@
-# PCSX2
+# PCSX2 3D Ripper
 
-![Windows Build Status](https://img.shields.io/github/actions/workflow/status/PCSX2/pcsx2/windows_build_matrix.yml?label=%F0%9F%96%A5%EF%B8%8F%20Windows%20Builds)
-![Linux Build Status](https://img.shields.io/github/actions/workflow/status/PCSX2/pcsx2/linux_build_matrix.yml?label=%F0%9F%90%A7%20Linux%20Builds)
-![MacOS Build Status](https://img.shields.io/github/actions/workflow/status/PCSX2/pcsx2/macos_build_matrix.yml?label=%F0%9F%8D%8E%20MacOS%20Builds)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/1f7c0d75fec74d6daa6adb084e5b4f71)](https://app.codacy.com/gh/PCSX2/pcsx2/dashboard?utm_source=github.com&utm_medium=referral&utm_content=PCSX2/pcsx2&utm_campaign=Badge_Grade)
-[![Discord Server](https://img.shields.io/discord/309643527816609793?color=%235CA8FA&label=PCSX2%20Discord&logo=discord&logoColor=white)](https://discord.com/invite/TCz3t9k)
+An unofficial, experimental fork of **PCSX2 v2.8.2** that captures PS2 scenes
+as OBJ models with MTL materials and PNG textures.
 
-PCSX2 is a free and open-source PlayStation 2 (PS2) emulator. Its purpose is to emulate the PS2's hardware, using a combination of MIPS CPU [Interpreters](<https://en.wikipedia.org/wiki/Interpreter_(computing)>), [Recompilers](https://en.wikipedia.org/wiki/Dynamic_recompilation) and a [Virtual Machine](https://en.wikipedia.org/wiki/Virtual_machine) which manages hardware states and PS2 system memory. This allows you to play PS2 games on your PC, with many additional features and benefits.
+## Features
 
-## Project Details
+- Single-frame 3D capture using the Software renderer.
+- OBJ geometry with vertex colors and Normal/Culled groups.
+- RGBA texture export with corrected pixel reads, cropping, and palette updates.
+- Filtering of invalid coordinates and zero-area triangles.
+- File-write error handling and bounded single-frame capture.
 
-PCSX2 has been in development for more than 20 years. Past versions could only run a few public domain game demos, but newer versions can run most games at full speed, including popular titles such as Final Fantasy X and Devil May Cry 3. Visit the [PCSX2 compatibility list](https://pcsx2.net/compat/) to check the latest compatibility status of games (with more than 2500 titles tested).
+## Usage
 
-Installers and binaries for both stable and nightly builds are available from [our website](https://pcsx2.net/downloads/).
+1. Run PCSX2 and configure your BIOS and controller.
+2. Select **Settings > Graphics > Renderer > Software**.
+3. Start a game and display the scene you want to capture.
+4. Press **Shift+F8** while emulation is running, or select
+   **Tools > Save Single Frame GS Dump**.
+5. Find the OBJ, MTL, and PNG files under
+   `snaps/screenshots_3d/<game_title_serial>/` in the PCSX2 data directory.
 
-## System Requirements
+Keep the OBJ, MTL, and textures together when importing them into a 3D editor.
+Enable Vertex Groups in Blender to retain the Normal and Culled groups.
+A standard GS dump is saved alongside the 3D capture.
 
-PCSX2 supports Windows, Linux, and Mac platforms. Our [setup documentation page](https://pcsx2.net/docs/setup/requirements) contains additional details on software and hardware requirements.
+## Limitations
 
-Please note that a BIOS dump from a legitimately-owned PS2 console is required to use the emulator. For more information, visit [this page](https://pcsx2.net/docs/setup/bios/).
+This build exports reconstructed geometry from GS draw data. It does not
+recover the original camera projection or automatically correct model
+proportions. Depth and vertical scales may need adjustment in a 3D editor.
 
-## Contributing / Building
+Face orientation, unwanted culled geometry, vertex alpha, and PS2 shading
+are not fully recovered. Capture remains experimental and may affect
+rendering while culled geometry is being collected. Hardware renderers
+are available for emulation, but 3D capture requires Software rendering.
 
-PCSX2 supports translation into other languages using [Crowdin](https://crowdin.com/project/pcsx2-emulator).
+No post-processing or calibration scripts are included.
 
-See the [Contribution Guide](https://pcsx2.net/docs/contributing/) for more info on how to contribute.
+## Building
+
+Follow the [PCSX2 build guide](https://pcsx2.net/docs/advanced/building/) for
+platform prerequisites and matching dependencies. For an x64 Windows developer
+environment with clang-cl, CMake, Ninja, and the Windows SDK available:
+
+```powershell
+cmake -S . -B build -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=clang-cl `
+  -DCMAKE_CXX_COMPILER=clang-cl `
+  -DCMAKE_PREFIX_PATH="C:/PCSX2-Dependencies" `
+  -DDISABLE_ADVANCE_SIMD=ON
+cmake --build build --target pcsx2-qt --parallel 8
+```
+
+Replace the dependency path with your local dependency directory. Run the
+resulting executable with the matching runtime DLLs, Qt plugins, and resources.
+
+The upstream PCSX2 test suite is retained. Windows x64 capture has been checked
+with Ultraman Fighting Evolution 3, including OBJ/texture validation and Blender
+import. Broader game and platform compatibility has not been established.
+
+## Credits and license
+
+- [PCSX2](https://github.com/PCSX2/pcsx2): emulator and stable release base.
+- [scurest](https://github.com/scurest/pcsx2): original 3D screenshot feature.
+
+Base release: [v2.8.2](https://github.com/PCSX2/pcsx2/releases/tag/v2.8.2),
+commit `fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3`.
+This is not an official PCSX2 binary. See [COPYING.GPLv3](COPYING.GPLv3) for the license.

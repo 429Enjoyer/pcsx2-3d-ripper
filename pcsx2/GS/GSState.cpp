@@ -152,6 +152,10 @@ std::string GSState::GetDrawDumpPath(const char* format, ...)
 void GSState::Reset(bool hardware_reset)
 {
 	Flush(GSFlushReason::RESET);
+	if (hardware_reset)
+		m_3d_screenshot.reset();
+	for (auto& flags : m_3d_tri_was_culled)
+		flags.clear();
 
 	// FIXME: bios logo not shown cut in half after reset, missing graphics in GoW after first FMV
 	memset(&m_path, 0, sizeof(m_path));
@@ -313,6 +317,7 @@ void GSState::ResetDrawBufferIdx()
 
 				memcpy(m_index_buffers[entry_ptr].buff, m_index_buffers[i].buff, sizeof(u16) * m_index_buffers[i].tail);
 				m_index_buffers[entry_ptr].tail = m_index_buffers[i].tail;
+				m_3d_tri_was_culled[entry_ptr] = std::move(m_3d_tri_was_culled[i]);
 
 				if (m_vertex_buffers[entry_ptr].tail != 0)
 				{
@@ -337,6 +342,7 @@ void GSState::ResetDrawBufferIdx()
 			if (i != (entry_ptr - 1))
 			{
 				m_index_buffers[i].tail = 0;
+				m_3d_tri_was_culled[i].clear();
 				memset(&m_env_buffers[i], 0, sizeof(GSDrawBufferEnv));
 				m_vertex_buffers[i].head = m_vertex_buffers[i].tail = m_vertex_buffers[i].next = 0;
 				m_vertex_buffers[i].xy_tail = 0;
@@ -372,6 +378,8 @@ void GSState::ResetDrawBufferIdx()
 
 void GSState::ResetDrawBuffers()
 {
+	for (auto& flags : m_3d_tri_was_culled)
+		flags.clear();
 	m_used_buffers_idx = 1;
 	m_max_vertex_count = 0;
 
@@ -950,6 +958,58 @@ void GSState::DumpDrawInfo(bool dump_regs, bool dump_verts, bool dump_transfers)
 		s = GetDrawDumpPath("%05lld_transfers.txt", s_n);
 		DumpTransferList(s);
 	}
+}
+
+std::vector<GS3DScreenshot::Tri> GSState::GetGeometryFor3DScreenshot()
+{
+	std::vector<GS3DScreenshot::Tri> triangles;
+	if (!m_3d_screenshot || GSUtil::GetVertexCount(PRIM->PRIM) != 3)
+		return triangles;
+
+	const GSVector2i fb_size = PCRTCDisplays.GetFramebufferSize(-1);
+	const auto& flags = m_3d_tri_was_culled[m_current_buffer_idx];
+	triangles.reserve(m_index->tail / 3);
+	for (u32 i = 0; i + 2 < m_index->tail; i += 3)
+	{
+		GS3DScreenshot::Tri tri{};
+		tri.texture_enabled = PRIM->TME;
+		tri.culled = i / 3 < flags.size() && flags[i / 3];
+		for (u32 j = 0; j < 3; j++)
+		{
+			const GSVertex& source = m_vertex->buff[m_index->buff[i + j]];
+			auto& vertex = tri.verts[j];
+			const double w = 1.0 / source.RGBAQ.Q;
+			const float x = (source.XYZ.X - static_cast<int>(m_context->XYOFFSET.OFX)) / 16.0f;
+			const float y = (source.XYZ.Y - static_cast<int>(m_context->XYOFFSET.OFY)) / 16.0f;
+			// This only undoes the perspective divide. Recovering the game's
+			// original projection scale still needs per-capture calibration.
+			vertex.x = static_cast<float>((x - fb_size.x / 2.0f) * w / 1024.0);
+			vertex.y = static_cast<float>(-(y - fb_size.y / 2.0f) * w / 1024.0);
+			vertex.z = static_cast<float>(-w);
+			vertex.q = source.RGBAQ.Q;
+			vertex.r = source.RGBAQ.R;
+			vertex.g = source.RGBAQ.G;
+			vertex.b = source.RGBAQ.B;
+			vertex.a = source.RGBAQ.A;
+			if (tri.texture_enabled)
+			{
+				if (m_context->TEX0.TFX == TFX_DECAL)
+					vertex.r = vertex.g = vertex.b = 128;
+				if (PRIM->FST)
+				{
+					vertex.u = source.U / 16.0f / (1u << m_context->TEX0.TW);
+					vertex.v = source.V / 16.0f / (1u << m_context->TEX0.TH);
+				}
+				else
+				{
+					vertex.u = source.ST.S / source.RGBAQ.Q;
+					vertex.v = source.ST.T / source.RGBAQ.Q;
+				}
+			}
+		}
+		triangles.push_back(tri);
+	}
+	return triangles;
 }
 
 void GSState::DumpVertices(const std::string& filename)
@@ -2665,6 +2725,8 @@ void GSState::FlushPrim()
 		}
 
 		idx_buff.tail = 0;
+		// Draw may have been skipped or returned before the capture hook.
+		m_3d_tri_was_culled[m_current_buffer_idx].clear();
 		vtx_buff.head = 0;
 
 		if (unused > 0)
@@ -5898,7 +5960,7 @@ __forceinline void GSState::VertexKick(u32 skip)
 	skip |= static_cast<u32>(m_scissor_invalid);
 
 	GSVector4i bbox;
-	if (skip == 0)
+	if (skip == 0 || (m_3d_screenshot && n == 3))
 	{
 		const GSVector4i v0 = vtx_buff.xy[(xy_tail - 1) & 3];
 		const GSVector4i v1 = vtx_buff.xy[(xy_tail - 2) & 3];
@@ -5959,7 +6021,7 @@ __forceinline void GSState::VertexKick(u32 skip)
 		skip |= test;
 	}
 
-	if (skip != 0)
+	if (skip != 0 && !(m_3d_screenshot && n == 3))
 	{
 		switch (prim)
 		{
@@ -6081,6 +6143,13 @@ __forceinline void GSState::VertexKick(u32 skip)
 	}
 
 	// Update rectangle for the current draw. Needs exclusive endpoints.
+	if (m_3d_screenshot && n == 3)
+	{
+		auto& flags = m_3d_tri_was_culled[m_current_buffer_idx];
+		flags.resize(idx_buff.tail / 3, false);
+		flags.back() = (skip != 0);
+	}
+
 	const GSVector4i draw_rect = bbox.sra32<4>() + GSVector4i(0, 0, 1, 1);
 	if (idx_buff.tail != n)
 		temp_draw_rect = temp_draw_rect.runion(draw_rect);

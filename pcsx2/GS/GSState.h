@@ -4,6 +4,7 @@
 #pragma once
 
 #include "GS/GS.h"
+#include "GS/GS3DScreenshot.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSLocalMemory.h"
 #include "GS/GSDrawingContext.h"
@@ -160,6 +161,11 @@ protected:
 
 	GSIndexBuff* m_index;
 
+	// Kept separately because GSIndexBuff is cleared with memset. Metadata
+	// follows the corresponding buffer when deferred draws are compacted.
+	std::array<std::vector<bool>, MAX_DRAW_BUFFERS> m_3d_tri_was_culled;
+	std::vector<GS3DScreenshot::Tri> GetGeometryFor3DScreenshot();
+
 	GSVertexBuff m_draw_vertex = {};
 
 	struct
@@ -290,6 +296,7 @@ public:
 	GSDrawingContext* m_context = nullptr;
 	GSVector4i temp_draw_rect;
 	std::unique_ptr<GSDumpBase> m_dump;
+	std::unique_ptr<GS3DScreenshot> m_3d_screenshot;
 	bool m_scissor_invalid = false;
 	bool m_quad_check_valid = false;
 	bool m_quad_check_valid_shuffle = false;
